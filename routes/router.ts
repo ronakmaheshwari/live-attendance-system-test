@@ -1,4 +1,5 @@
 import { Router } from "express";
+import userRouter from "./user";
 
 interface RouterInterface {
     router: Router,
@@ -7,6 +8,11 @@ interface RouterInterface {
 
 const router:Router = Router();
 
-const allRoutes:RouterInterface[] = []
+const allRoutes:RouterInterface[] = [
+    {
+        router: userRouter,
+        path: "/user"
+    }
+]
 
 export default router;
