@@ -6,6 +6,7 @@ import bcrypt from "bcrypt"
 import ApiError from "../utils/error";
 import jwt from "jsonwebtoken"
 import userMiddleware from "../middleware";
+import { activeSession, startSession,type ActiveSession } from "../utils/attendanceSession";
 
 dotenv.config();
 
@@ -89,6 +90,114 @@ userRouter.get("/students",userMiddleware,async(req: Request,res: Response)=>{
         })
     } catch (error) {
         console.log("[User Router Students]: Error that took place at ",error);
+    }
+})
+
+userRouter.get("/class/:id/my-attendance",userMiddleware,async(req: Request,res: Response)=>{
+    try {
+        const user = req.user;
+        if(!user?.userId || !user.role){
+            return res.status(402).json({
+                error: true,
+                data: "Unauthorized user tried to access services"
+            })
+        }
+        if(user.role !== "student"){
+            return res.status(402).json({
+                error: true,
+                data: "This Service can only be accessed by students only"
+            })
+        }
+        const classId = req.params.id;
+        if(!classId){
+            return res.status(404).json({
+                error: true,
+                data: "No classId was provided"
+            })
+        }
+        const findStudent = await db.classStudent.findUnique({
+            where:{
+                studentId_classId:{
+                    classId,
+                    studentId: user.userId
+                }
+            },
+            include:{
+                class: true
+            }
+        })
+        if(!findStudent){
+            return res.status(404).json({
+                error: true,
+                data: `You are not enrolled in the given class`
+            })
+        }
+        const findPresent = await db.attendance.findFirst({
+            where:{
+                classId: classId,
+                studentId: user.userId,
+            }
+        })
+        return res.status(200).json({
+            error: false,
+            data: `You successfully fetched your presenties in the class ${findStudent.class.className}`,
+            classId: findStudent.classId,
+            status: findPresent?.status ?? null
+        })
+    } catch (error) {
+        console.log("[User Router MY-Attendance]: Error that took place at ",error);
+    }
+})
+
+userRouter.post("/:id/attendance/start",async(req: Request,res: Response)=>{
+    try {
+        const user = req.user;
+        if(!user?.userId || !user.role){
+            return res.status(402).json({
+                error: true,
+                data: "Unauthorized user tried to access services"
+            })
+        }
+        if(user.role !== "teacher"){
+            return res.status(402).json({
+                error: true,
+                data: "This Service can only be accessed by teachers only"
+            })
+        }
+        const classId = req.params.id
+        if(!classId){
+            return res.status(402).json({
+                error: true,
+                data: "No classId was provided"
+            })
+        }
+        const findClass = await db.class.findUnique({
+            where:{
+                id: classId,
+                teacherId: user.userId
+            }
+        })
+        if(!findClass){
+            return res.status(404).json({
+                error: true,
+                data:`The Class doesnt belong to you`
+            })
+        }
+        if (activeSession) {
+            throw ApiError.conflict(
+            "An attendance session is already active"
+            );
+        }
+        let session:ActiveSession = startSession(classId);
+        return res.status(200).json({
+        success: true,
+        data: {
+            classId: session.classId,
+            startedAt: session.startedAt,
+        },
+        });
+    } catch (error) {
+        console.log("[User Router Attendance-Start]: Error that took place at ",error);
     }
 })
 
