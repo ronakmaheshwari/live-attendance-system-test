@@ -1,10 +1,11 @@
 import dotenv from "dotenv"
 import { Router, type Request, type Response } from "express";
-import { SigninType, SignupType } from "../utils/types";
+import { addStudentType, classType, SigninType, SignupType } from "../utils/types";
 import db from "../utils/db";
 import bcrypt from "bcrypt"
 import ApiError from "../utils/error";
 import jwt from "jsonwebtoken"
+import userMiddleware from "../middleware";
 
 dotenv.config();
 
@@ -16,11 +17,78 @@ if(!SaltRound || !JWT){
 
 const userRouter: Router = Router();
 
-userRouter.get("/me",async (req: Request,res: Response) => {
+userRouter.get("/me",userMiddleware,async (req: Request,res: Response) => {
     try {
+        const user = req.user;
+        if(!user?.userId || !user.role){
+            return res.status(402).json({
+                error: true,
+                data: "Unauthorized user tried to access services"
+            })
+        }
         
+        const findUser = await db.user.findUnique({
+            where:{
+                id: user.userId
+            },
+            select:{
+                name: true,
+                email: true,
+                role: true
+            }
+        })
+        if(!findUser){
+            return res.status(404).json({
+                error: true,
+                data: `No user was found with that ${user.userId}`
+            })
+        }
+        return res.status(200).json({
+            error: false,
+            data: findUser
+        })
     } catch (error) {
-        console.log("[User Router Signup]: Error that took place at ",error);
+        console.log("[User Router ME]: Error that took place at ",error);
+    }
+})
+
+userRouter.get("/students",userMiddleware,async(req: Request,res: Response)=>{
+    try {
+        const user = req.user;
+        if(!user?.userId || !user.role){
+            return res.status(402).json({
+                error: true,
+                data: "Unauthorized user tried to access services"
+            })
+        }
+        if(user.role !== "teacher"){
+            return res.status(400).json({
+                error: true,
+                data: "Only Teacher can access these service"
+            })
+        }
+        const findAll = await db.user.findMany({
+            where:{
+                role: "student"
+            },
+            select:{
+                id: true,
+                name: true,
+                email: true
+            }
+        })
+        return res.status(200).json({
+            error: false,
+            data: {
+                students: findAll.map((x) => ({
+                    id: x.id,
+                    name: x.name,
+                    email: x.email
+                }))
+            }
+        })
+    } catch (error) {
+        console.log("[User Router Students]: Error that took place at ",error);
     }
 })
 
@@ -55,7 +123,7 @@ userRouter.post("/signup",async(req: Request,res: Response) =>{
                 role
             }
         })
-        const token = jwt.sign({userId: createUser.id,role: createUser.role},JWT);
+        const token = jwt.sign({userId: createUser.id,role: createUser.role},JWT,{expiresIn: "1d"});
         return res.status(200).json({
             error: false,
             token: token,
@@ -95,15 +163,181 @@ userRouter.post("/login",async (req:Request,res: Response) => {
                 data: "Invalid password was provided"
             })
         }
-        const token = jwt.sign({userId: findUser.id,role: findUser.role},JWT);
+        const token = jwt.sign({userId: findUser.id,role: findUser.role},JWT, {
+                expiresIn: "1d",
+            }
+        );
         return res.status(200).json({
             error: false,
             token: token,
             data: `${findUser.name} was successfully logged in`
         })
     } catch (error) {
-        console.log("[User Router Signup]: Error that took place at ",error);
+        console.log("[User Router Login]: Error that took place at ",error);
     }
 })
+
+userRouter.post("/class",userMiddleware,async (req: Request,res: Response) => {
+    try {
+        const user = req.user;
+        if(!user?.userId || !user.role){
+            return res.status(402).json({
+                error: true,
+                data: "Unauthorized user tried to access services"
+            })
+        }
+        if(user.role !== "teacher"){
+            return res.status(400).json({
+                error: true,
+                data: "Only Teacher can access these service"
+            })
+        }
+        const parsed = classType.safeParse(req.body);
+        if(!parsed.success){
+            return res.status(400).json({
+                error: true,
+                data: "Invalid class-name was provided"
+            })
+        }
+        const {className} = parsed.data;
+        const createClass = await db.class.create({
+            data:{
+                className: className,
+                teacherId: user.userId,
+            }
+        })
+        return res.status(200).json({
+            error: false,
+            data: "Class was Successfully created",
+        })
+    } catch (error) {
+        console.log("[User Router Class]: Error that took place at ",error);
+    }
+})
+
+userRouter.get("/class/:id",userMiddleware,async (req: Request,res: Response) => {
+    try {
+        const classId = req.params.id;
+        const user = req.user;
+        if(!user?.userId || !user.role){
+            return res.status(402).json({
+                error: true,
+                data: "Unauthorized user tried to access services"
+            })
+        }
+        const findUser = await db.class.findUnique({
+            where:{
+                id: classId,
+            },
+            include:{
+                students:{
+                    include:{
+                        student:{
+                            select:{
+                                id: true,
+                                name: true,
+                                email: true
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        
+        if(!findUser){
+            return res.status(404).json({
+                error: true,
+                data: "Invalid ClassId was provided"
+            })
+        }
+        const isTeacher = user.role === "teacher" && findUser.teacherId === user.userId;
+        const isStudentAllowed = user.role === "student" && findUser.students.some((x) => x.studentId === user.userId);
+        if(!isTeacher || !isStudentAllowed){
+            return res.status(402).json({
+                error: true,
+                data: "Unauthorized user tried to access class"
+            })
+        }
+        return res.status(200).json({
+            error: false,
+            data:{
+                id: findUser.id,
+                className: findUser.className,
+                teacher: findUser.teacherId,
+                students: findUser.students.map((x)=>({
+                    id: x.studentId,
+                    name: x.student.name,
+                    email: x.student.email
+                }))
+            }
+        })
+    } catch (error) {
+        console.log("[User Router GETClassDetails]: Error that took place at ",error);
+    }
+})
+
+userRouter.post("/class/:id/add-student",userMiddleware,async (req: Request,res: Response) => {
+    try {
+        const user = req.user;
+        if(!user?.userId || !user.role){
+            return res.status(402).json({
+                error: true,
+                data: "Unauthorized user tried to access services"
+            })
+        }
+        if(user.role !== "teacher"){
+            return res.status(400).json({
+                error: true,
+                data: "Only Teacher can access this service"
+            })
+        }
+        const parsed = addStudentType.safeParse(req.body);
+        if(!parsed.success){
+            return res.status(400).json({
+                error: true,
+                data: "Invalid Student Type was provided"
+            })
+        }
+        const {studentId} = parsed.data;
+        const classId = req.params.id;
+        const findClass = await db.class.findUnique({
+            where:{
+                id: classId,
+                teacherId: user.userId
+            }
+        })
+        if(!findClass){
+            return res.status(400).json({
+                error: true,
+                data:"Invalid ClassId was provided or Class doesnt belong to you"
+            })
+        }
+
+        const findUser = await db.user.findUnique({
+            where:{
+                id: studentId
+            }
+        })
+        if(!findUser){
+            return res.status(400).json({
+                error: true,
+                data:"Invalid StudentId was provided"
+            })
+        }
+        const addUser = await db.classStudent.create({
+            data: {
+                studentId: findUser.id,
+                classId: findClass.id
+            }
+        })
+        return res.status(200).json({
+            error: false,
+            data: `${findUser.name} was added in class ${findClass.className}`
+        })
+    } catch (error) {
+        console.log("[User Router Add_Student]: Error that took place at ",error);
+    }
+})
+
 
 export default userRouter;
