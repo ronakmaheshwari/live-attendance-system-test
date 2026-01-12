@@ -3,6 +3,11 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "scripts": {
+    "dev:http": "bun run index.ts",
+    "dev:ws": "bun run websocket.ts",
+    "dev": "bun run dev:http & bun run dev:ws"
+  },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
     "@types/bun": "latest",
