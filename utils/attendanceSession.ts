@@ -3,7 +3,7 @@ import type { Status } from "@prisma/client"
 export type ActiveSession = {
     classId: string,
     startedAt: Date,
-    attendance: Record<number,Status>,
+    attendance: Record<string,Status>,
 }
 export let activeSession: ActiveSession | null = null;
 
