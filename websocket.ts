@@ -5,7 +5,8 @@ import { WebSocketServer } from "ws";
 import type { Role } from "@prisma/client";
 import ApiError from "./utils/error";
 import jwt, { type JwtPayload } from "jsonwebtoken"
-import { activeSession } from "./utils/attendanceSession";
+import { activeSession, endSession } from "./utils/attendanceSession";
+import db from "./utils/db";
 
 dotenv.config();
 const app: Express = express()
@@ -119,7 +120,7 @@ const handleMyAttendance = (socket: AuthSocket) => {
         sendError(socket,"No active Session is running");
     }
     if(activeSession){
-        let status = activeSession.attendance[socket.userId];
+        let status = activeSession.attendance[socket.userId] ?? "not yet updated";
         if(!status){
             sendError(socket,"The given user is not part of the session");
         }
@@ -130,6 +131,84 @@ const handleMyAttendance = (socket: AuthSocket) => {
                         event: "MY_ATTENDANCE",
                         data: {
                             status: status
+                        }
+                    })
+                )
+            }
+        })
+    }
+}
+
+const handleTodayClass = async (socket: AuthSocket) => {
+    if(socket.role !== "teacher"){
+        sendError(socket,"This service can only be accessed by Teachers only");
+    }
+    if(!activeSession){
+        sendError(socket,"No active Session is running");
+    }
+    if(activeSession){
+        const getStudents = await db.classStudent.findMany({
+            where:{
+                classId: activeSession.classId
+            },
+            include:{
+                student: true
+            }
+        })
+        const getMarked = Object.keys(activeSession.attendance);
+
+        const addAbsent = getStudents.forEach((x)=>{
+           if(!getMarked.includes(x.studentId)){
+            if(activeSession){
+              activeSession.attendance[x.studentId] = "absent";
+            }
+           }
+        })
+
+        for(let x of Object.keys(activeSession.attendance)) {
+            const status = activeSession.attendance[x];
+            if (status) {
+                const addToDb = await db.attendance.create({
+                    data:{
+                        classId: activeSession.classId,
+                        studentId: x,
+                        status: status
+                    }
+                })
+            }
+        }
+
+        const [total, present, absent] = await Promise.all([
+            db.classStudent.count({
+                where:{
+                    classId: activeSession.classId
+                }
+            }),
+            db.attendance.count({
+                where:{
+                    classId: activeSession.classId,
+                    status: "present"
+                }
+            }),
+            db.attendance.count({
+                where:{
+                    classId: activeSession.classId,
+                    status: "absent"
+                }
+            })
+        ])
+
+        endSession();
+        wss.clients.forEach((ws)=>{
+            if(ws.readyState === WebSocket.OPEN){
+                ws.send(
+                    JSON.stringify({
+                        event: "DONE",
+                        data: {
+                            message: "Attendance persisted" ,
+                            present: present,
+                            absent: absent,
+                            total: total
                         }
                     })
                 )
@@ -174,7 +253,11 @@ wss.on("connection",(ws,req)=>{
                 handleTodaySummary(user);
                 break;
             case "MY_ATTENDANCE":
-
+                handleMyAttendance(user);
+                break;
+            case "DONE":
+                handleTodayClass(user);
+                break;
             default:
                 ws.send("You were connected successfully")
         }
