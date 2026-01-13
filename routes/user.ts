@@ -10,9 +10,13 @@ import { activeSession, startSession,type ActiveSession } from "../utils/attenda
 
 dotenv.config();
 
-const SaltRound = process.env.SALT_ROUND
+const SaltRound = Number(process.env.SALT_ROUND ?? 10);
+
+if (Number.isNaN(SaltRound)) {
+  throw ApiError.internal("Invalid SALT_ROUND value");
+}
 const JWT = process.env.JWT_SECRET;
-if(!SaltRound || !JWT){
+if(!JWT){
     throw ApiError.internal()
 }
 
@@ -223,7 +227,7 @@ userRouter.post("/signup",async(req: Request,res: Response) =>{
                 data: `Email ${findUser.email} already exists with our servers`
             })
         }
-        const hashedPassword =await bcrypt.hash(password,SaltRound);
+        const hashedPassword = await bcrypt.hash(password, SaltRound);
         const createUser = await db.user.create({
             data:{
                 name,

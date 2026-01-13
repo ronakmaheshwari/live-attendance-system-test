@@ -15,4 +15,8 @@ const allRoutes:RouterInterface[] = [
     }
 ]
 
+allRoutes.forEach((x)=>{
+    router.use(x.path,x.router);
+})
+
 export default router;

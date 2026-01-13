@@ -3,10 +3,15 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "prisma": {
+    "seed": "bun prisma/seed.ts"
+  },
   "scripts": {
     "dev:http": "bun run index.ts",
     "dev:ws": "bun run websocket.ts",
-    "dev": "bun run dev:http & bun run dev:ws"
+    "dev": "bun run dev:http & bun run dev:ws",
+    "seed:db": "bunx prisma db seed",
+    "reset": "bun run prisma/reset.ts"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
