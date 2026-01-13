@@ -153,7 +153,7 @@ userRouter.get("/class/:id/my-attendance",userMiddleware,async(req: Request,res:
     }
 })
 
-userRouter.post("/:id/attendance/start",async(req: Request,res: Response)=>{
+userRouter.post("/:id/attendance/start",userMiddleware, async(req: Request,res: Response)=>{
     try {
         const user = req.user;
         if(!user?.userId || !user.role){
@@ -332,7 +332,13 @@ userRouter.get("/class/:id",userMiddleware,async (req: Request,res: Response) =>
     try {
         const classId = req.params.id;
         const user = req.user;
-        if(!user?.userId || !user.role){
+        if(!user){
+            return res.status(401).json({
+                error: true,
+                data: "Unauthorized user tried to access services"
+            })
+        }
+        if(!user.userId || !user.role){
             return res.status(402).json({
                 error: true,
                 data: "Unauthorized user tried to access services"
@@ -363,9 +369,10 @@ userRouter.get("/class/:id",userMiddleware,async (req: Request,res: Response) =>
                 data: "Invalid ClassId was provided"
             })
         }
-        const isTeacher = user.role === "teacher" && findUser.teacherId === user.userId;
-        const isStudentAllowed = user.role === "student" && findUser.students.some((x) => x.studentId === user.userId);
-        if(!isTeacher || !isStudentAllowed){
+        const isAuthorized =
+        (user.role === "teacher" && findUser.teacherId === user.userId) ||
+        (user.role === "student" && findUser.students.some(s => s.studentId === user.userId));
+        if(!isAuthorized){
             return res.status(402).json({
                 error: true,
                 data: "Unauthorized user tried to access class"

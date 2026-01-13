@@ -219,16 +219,16 @@ const handleTodayClass = async (socket: AuthSocket) => {
 
 wss.on("connection",(ws,req)=>{
     const url = require('url');
-    const authToken = url.parse(req.url,true).query;
-    console.log('Query parameters:', authToken);
-
-    const token = authToken;
+    const parsedUrl = url.parse(req.url, true);
+    const token = parsedUrl.query.token as string;
+    
     if(!token){
         throw ApiError.unauthorized();
     }
-    const decoded = jwt.verify(token, JWT_SECRET as string) as unknown as JwtPayload & {
-        userId: string;
-        role: Role;
+    
+    const decoded = jwt.verify(token, JWT_SECRET as string) as JwtPayload & {
+    userId: string;
+    role: Role;
     };
     if (!decoded.userId || !decoded.role) {
       throw ApiError.unauthorized("Invalid token payload");
