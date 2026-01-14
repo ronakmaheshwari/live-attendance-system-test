@@ -178,29 +178,35 @@ const handleTodayClass = async (socket: AuthSocket, classId: string) => {
             }
         })
 
-        const getMarked = Object.keys(activeSession.attendance);
-
-        const addAbsent = getStudents.forEach(async (x)=>{
-
-           if(!getMarked.includes(x.studentId)){
-              //activeSession.attendance[x.studentId] = "absent";
-              await markAttendance(classId, x.studentId, "absent");
-           }
-
-        })
-
-        for(let x of Object.keys(activeSession.attendance)) {
-            const status = activeSession.attendance[x];
-            if (status) {
-                const addToDb = await db.attendance.create({
-                    data:{
-                        classId: activeSession.classId,
-                        studentId: x,
-                        status: status
-                    }
-                })
+        const markedIds = new Set(Object.keys(activeSession.attendance));
+        for (const s of getStudents) {
+            if (!markedIds.has(s.studentId)) {
+            await markAttendance(classId, s.studentId, "absent");
             }
         }
+        // const getMarked = Object.keys(activeSession.attendance);
+
+        // const addAbsent = getStudents.forEach(async (x)=>{
+        //    if(!getMarked.includes(x.studentId)){
+        //       //activeSession.attendance[x.studentId] = "absent";
+        //       await markAttendance(classId, x.studentId, "absent");
+        //    }
+
+        // })
+          const finalSession = await getSession(classId);
+          if (!finalSession) return;
+
+        await db.$transaction(async (tx) => {
+            for (const [studentId, status] of Object.entries(finalSession.attendance)) {
+            await tx.attendance.create({
+                data: {
+                    classId,
+                    studentId,
+                    status
+                }
+                });
+            }
+        });
 
         const [total, present, absent] = await Promise.all([
             db.classStudent.count({
