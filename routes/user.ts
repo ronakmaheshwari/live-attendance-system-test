@@ -6,7 +6,7 @@ import bcrypt from "bcrypt"
 import ApiError from "../utils/error";
 import jwt from "jsonwebtoken"
 import userMiddleware from "../middleware";
-import { activeSession, startSession,type ActiveSession } from "../utils/attendanceSession";
+import { getSession, startSession, type ActiveSession } from "../utils/redis";
 
 dotenv.config();
 
@@ -187,12 +187,13 @@ userRouter.post("/:id/attendance/start",userMiddleware, async(req: Request,res: 
                 data:`The Class doesnt belong to you`
             })
         }
-        if (activeSession) {
+        const checkSession = await getSession(classId)
+        if (checkSession) {
             throw ApiError.conflict(
             "An attendance session is already active"
             );
         }
-        let session:ActiveSession = startSession(classId);
+        let session:ActiveSession =await startSession(classId);
         return res.status(200).json({
         success: true,
         data: {

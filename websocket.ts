@@ -5,8 +5,9 @@ import { WebSocketServer } from "ws";
 import type { Role } from "@prisma/client";
 import ApiError from "./utils/error";
 import jwt, { type JwtPayload } from "jsonwebtoken"
-import { activeSession, endSession } from "./utils/attendanceSession";
+//import { activeSession, endSession } from "./utils/attendanceSession";
 import db from "./utils/db";
+import { deleteSession, findStudentAttendance, getSession, markAttendance, todaySummary } from "./utils/redis";
 
 dotenv.config();
 const app: Express = express()
@@ -31,6 +32,7 @@ interface AuthSocket extends WebSocket {
 }
 
 interface AttendanceMarkedType {
+    classId: string;
     studentId: string;
     status: "present" | "absent";
 }
@@ -46,23 +48,26 @@ const sendError = (ws: WebSocket, message: string) =>{
     );
 }
 
-const handleAttendanceMarked = (socket: AuthSocket, data: AttendanceMarkedType) =>{
+const handleAttendanceMarked = async (socket: AuthSocket, data: AttendanceMarkedType) =>{
     if(socket.role !== "teacher"){
         sendError(socket,"Only Teachers can access these services");
     }
-
+    const activeSession = await getSession(data.classId);
+    
     if(!activeSession){
         sendError(socket,"No active Session is running");
     }
-    const { studentId, status } = data;
+
+    const { studentId, status, classId } = data;
     if (!studentId || !status) {
         sendError(socket, "Invalid attendance payload");
         return;
     }
-
-    if (activeSession) {
-        activeSession.attendance[studentId] = status;
+    const handle_Attendance = await markAttendance(classId,studentId,status);
+    if(handle_Attendance !== true){
+        sendError(socket,"No active Session is running");
     }
+    
     wss.clients.forEach((ws)=>{
         if(ws.readyState === WebSocket.OPEN){
             ws.send(
@@ -78,23 +83,30 @@ const handleAttendanceMarked = (socket: AuthSocket, data: AttendanceMarkedType) 
     })
 }
 
-const handleTodaySummary = (socket: AuthSocket) => {
+const handleTodaySummary = async (socket: AuthSocket,classId: string) => {
     if(socket.role !== "teacher"){
         sendError(socket,"Only Teachers can access these services");
     }
+    const activeSession = await getSession(classId);
     if(!activeSession){
         sendError(socket,"No active Session is running");
     }
-    let present: number = 0;
-    let absent = 0;
-    let total = 0;
-    if(activeSession){
-        total = Object.keys(activeSession).length;
-        present = Object.values(activeSession.attendance).filter((x)=> (
-                x === "present"
-            )
-        ).length
-        absent = total - present;
+
+    // let present: number = 0;
+    // let absent = 0;
+    // let total = 0;
+    // if(activeSession){
+    //     total = Object.keys(activeSession).length;
+    //     present = Object.values(activeSession.attendance).filter((x)=> (
+    //             x === "present"
+    //         )
+    //     ).length
+    //     absent = total - present;
+    // }
+
+    const getSummary = await todaySummary(classId);
+    if(!getSummary.success){
+        sendError(socket,"No active Session is running");
     }
     wss.clients.forEach((ws) =>{
         if(ws.readyState === WebSocket.OPEN){
@@ -102,9 +114,9 @@ const handleTodaySummary = (socket: AuthSocket) => {
                 JSON.stringify({
                     event: "TODAY_SUMMARY",
                     data:{
-                        total: total,
-                        present: present,
-                        absent: absent
+                        total: getSummary.total,
+                        present: getSummary.present,
+                        absent: getSummary.absent
                     }
                 })
             )
@@ -112,25 +124,32 @@ const handleTodaySummary = (socket: AuthSocket) => {
     }) 
 }
 
-const handleMyAttendance = (socket: AuthSocket) => {
+const handleMyAttendance = async (socket: AuthSocket,classId: string) => {
     if(socket.role !== "student"){
         sendError(socket,"This service can only be accessed by students only");
     }
+    const activeSession = await getSession(classId);
+    
     if(!activeSession){
         sendError(socket,"No active Session is running");
     }
+
     if(activeSession){
-        let status = activeSession.attendance[socket.userId] ?? "not yet updated";
-        if(!status){
+        //let status = activeSession.attendance[socket.userId] ?? "not yet updated";
+        let status = await findStudentAttendance(classId, socket.userId) 
+
+        if(!status.success){
             sendError(socket,"The given user is not part of the session");
         }
+        let details = status.status ?? "Not yet updated";
+
         wss.clients.forEach((ws)=>{
             if(ws.readyState === WebSocket.OPEN && ws === socket){
                 ws.send(
                     JSON.stringify({
                         event: "MY_ATTENDANCE",
                         data: {
-                            status: status
+                            status: details
                         }
                     })
                 )
@@ -139,13 +158,16 @@ const handleMyAttendance = (socket: AuthSocket) => {
     }
 }
 
-const handleTodayClass = async (socket: AuthSocket) => {
+const handleTodayClass = async (socket: AuthSocket, classId: string) => {
     if(socket.role !== "teacher"){
         sendError(socket,"This service can only be accessed by Teachers only");
     }
+    const activeSession = await getSession(classId);
+    
     if(!activeSession){
         sendError(socket,"No active Session is running");
     }
+
     if(activeSession){
         const getStudents = await db.classStudent.findMany({
             where:{
@@ -155,14 +177,16 @@ const handleTodayClass = async (socket: AuthSocket) => {
                 student: true
             }
         })
+
         const getMarked = Object.keys(activeSession.attendance);
 
-        const addAbsent = getStudents.forEach((x)=>{
+        const addAbsent = getStudents.forEach(async (x)=>{
+
            if(!getMarked.includes(x.studentId)){
-            if(activeSession){
-              activeSession.attendance[x.studentId] = "absent";
-            }
+              //activeSession.attendance[x.studentId] = "absent";
+              await markAttendance(classId, x.studentId, "absent");
            }
+
         })
 
         for(let x of Object.keys(activeSession.attendance)) {
@@ -198,7 +222,8 @@ const handleTodayClass = async (socket: AuthSocket) => {
             })
         ])
 
-        endSession();
+        await deleteSession(classId);
+
         wss.clients.forEach((ws)=>{
             if(ws.readyState === WebSocket.OPEN){
                 ws.send(
@@ -250,17 +275,20 @@ wss.on("connection",(ws,req)=>{
                 handleAttendanceMarked(user,payload.data);
                 break;
             case "TODAY_SUMMARY":
-                handleTodaySummary(user);
+                handleTodaySummary(user,payload.data);
                 break;
             case "MY_ATTENDANCE":
-                handleMyAttendance(user);
+                handleMyAttendance(user,payload.data);
                 break;
             case "DONE":
-                handleTodayClass(user);
+                handleTodayClass(user, payload.data);
                 break;
             default:
                 ws.send("You were connected successfully")
         }
     })
 
+    ws.on("close", () =>{
+        ws.send("Connection has closed");
+    })
 })
